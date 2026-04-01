@@ -1,0 +1,481 @@
+diff --git a/src/avrora/sim/radio/CustomTransmissionList.java b/src/avrora/sim/radio/CustomTransmissionList.java
+new file mode 100644
+index 0000000..b0443e8
+--- /dev/null
++++ b/src/avrora/sim/radio/CustomTransmissionList.java
+@@ -0,0 +1,146 @@
++package avrora.sim.radio;
++
++import avrora.sim.radio.Medium.Transmitter;
++
++public final class CustomTransmissionList {
++    public long[] firstBit;
++    public Transmitter[] transmitters;
++    public double[] Pt;
++    public double[] Freq;
++    public double[] power;
++    public long[] start;
++
++    // Object references for mutable field access (lastBit, end, counter, data)
++    private Medium.Transmission[] txRefs;
++
++    public int length;
++    private int capacity;
++
++    public CustomTransmissionList() {
++        this(16);
++    }
++
++    public CustomTransmissionList(int initialCapacity) {
++        capacity = initialCapacity;
++        length = 0;
++        firstBit = new long[capacity];
++        transmitters = new Transmitter[capacity];
++        Pt = new double[capacity];
++        Freq = new double[capacity];
++        power = new double[capacity];
++        start = new long[capacity];
++        txRefs = new Medium.Transmission[capacity];
++    }
++
++    public void add(Medium.Transmission tx) {
++        if (length == capacity) {
++            grow();
++        }
++        firstBit[length] = tx.firstBit;
++        transmitters[length] = tx.origin;
++        Pt[length] = tx.Pt;
++        Freq[length] = tx.f;
++        power[length] = tx.power;
++        start[length] = tx.start;
++        txRefs[length] = tx;
++        length++;
++    }
++
++    public void addFrom(CustomTransmissionList src, int srcIndex) {
++        if (length == capacity) {
++            grow();
++        }
++        firstBit[length] = src.firstBit[srcIndex];
++        transmitters[length] = src.transmitters[srcIndex];
++        Pt[length] = src.Pt[srcIndex];
++        Freq[length] = src.Freq[srcIndex];
++        power[length] = src.power[srcIndex];
++        start[length] = src.start[srcIndex];
++        txRefs[length] = src.txRefs[srcIndex];
++        length++;
++    }
++
++    public void clear() {
++        for (int i = 0; i < length; i++) {
++            transmitters[i] = null;
++            txRefs[i] = null;
++        }
++        length = 0;
++    }
++
++    public Transmitter getTransmitter(int index) {
++        return transmitters[index];
++    }
++
++    public double getPt(int index) {
++        return Pt[index];
++    }
++
++    public double getFrequency(int index) {
++        return Freq[index];
++    }
++
++    public long getFirstBit(int index) {
++        return firstBit[index];
++    }
++
++    public long getLastBit(int index) {
++        return txRefs[index].lastBit;
++    }
++
++    public Medium.Transmission getTransmissionRef(int index) {
++        return txRefs[index];
++    }
++
++    public byte getByteAtTime(int index, long bit) {
++        return txRefs[index].getByteAtTime(bit);
++    }
++
++    public int size() {
++        return length;
++    }
++
++    public void remove(int index) {
++        int numMoved = length - index - 1;
++        if (numMoved > 0) {
++            System.arraycopy(firstBit, index + 1, firstBit, index, numMoved);
++            System.arraycopy(transmitters, index + 1, transmitters, index, numMoved);
++            System.arraycopy(Pt, index + 1, Pt, index, numMoved);
++            System.arraycopy(Freq, index + 1, Freq, index, numMoved);
++            System.arraycopy(power, index + 1, power, index, numMoved);
++            System.arraycopy(start, index + 1, start, index, numMoved);
++            System.arraycopy(txRefs, index + 1, txRefs, index, numMoved);
++        }
++        length--;
++        transmitters[length] = null;
++        txRefs[length] = null;
++    }
++
++    private void grow() {
++        int newCapacity = capacity * 2;
++        long[] newFirstBit = new long[newCapacity];
++        Transmitter[] newTransmitters = new Transmitter[newCapacity];
++        double[] newPt = new double[newCapacity];
++        double[] newFreq = new double[newCapacity];
++        double[] newPower = new double[newCapacity];
++        long[] newStart = new long[newCapacity];
++        Medium.Transmission[] newTxRefs = new Medium.Transmission[newCapacity];
++
++        System.arraycopy(firstBit, 0, newFirstBit, 0, length);
++        System.arraycopy(transmitters, 0, newTransmitters, 0, length);
++        System.arraycopy(Pt, 0, newPt, 0, length);
++        System.arraycopy(Freq, 0, newFreq, 0, length);
++        System.arraycopy(power, 0, newPower, 0, length);
++        System.arraycopy(start, 0, newStart, 0, length);
++        System.arraycopy(txRefs, 0, newTxRefs, 0, length);
++
++        firstBit = newFirstBit;
++        transmitters = newTransmitters;
++        Pt = newPt;
++        Freq = newFreq;
++        power = newPower;
++        start = newStart;
++        txRefs = newTxRefs;
++        capacity = newCapacity;
++    }
++}
+diff --git a/src/avrora/sim/radio/LossyModel.java b/src/avrora/sim/radio/LossyModel.java
+index 8624851..d8bbd76 100644
+--- a/src/avrora/sim/radio/LossyModel.java
++++ b/src/avrora/sim/radio/LossyModel.java
+@@ -22,6 +22,7 @@ package avrora.sim.radio;
+ 
+ import java.util.*;
+ import avrora.sim.state.Complex;
++import avrora.sim.radio.Medium.Transmitter;
+ import avrora.sim.radio.Topology;
+ 
+ /**
+@@ -43,28 +44,31 @@ public class LossyModel implements Medium.Arbitrator {
+         positions = new HashMap<Object, Topology.Position>();
+     }
+ 
+-    public boolean lockTransmission(Medium.Receiver receiver, Medium.Transmission trans,int Milliseconds) {
+-        double PowerRec = computeReceivedPower(trans,receiver,Milliseconds);
++    public boolean lockTransmission(Medium.Receiver receiver, Transmitter tObject, double tPt, double tF, int Milliseconds) {
++        double PowerRec = computeReceivedPower(tObject, tPt, receiver, Milliseconds);
+         int Pn = getNoise(Milliseconds);
+-        if (trans.f == receiver.frequency){
++        if (tF == receiver.frequency){
+             if (PowerRec > Sensitivity && PowerRec > Pn) return true;
+             else return false;
+         }else return false;
+     }
+ 
+-    public char mergeTransmissions(Medium.Receiver receiver, List<Medium.Transmission> it, long bit,int Milliseconds) {
+-        assert it.size() > 0;
++    public char mergeTransmissions(Medium.Receiver receiver, CustomTransmissionList it, long bit,int Milliseconds) {
++        assert it.length > 0;
+         boolean one = false;
+         int value = 0;
+-        for (Medium.Transmission next : it) {
+-            if (lockTransmission(receiver, next, Milliseconds)) {
++        for (int i = 0; i < it.length; i++) {
++            Transmitter tObject = it.getTransmitter(i);
++            double tPt = it.getPt(i);
++            double tF = it.getFrequency(i);
++            if (lockTransmission(receiver, tObject, tPt, tF, Milliseconds)) {
+                 if (one) {
+-                    int nval = 0xff & next.getByteAtTime(bit);
++                    int nval = 0xff & it.getByteAtTime(i, bit);
+                     value |= (nval << 8) ^ (value << 8); // compute corrupted bits
+                     value |= nval;
+                 } else {
+                     one = true;
+-                    value = 0xff & next.getByteAtTime(bit);
++                    value = 0xff & it.getByteAtTime(i, bit);
+                 }
+             }
+         }
+@@ -149,12 +153,12 @@ public class LossyModel implements Medium.Arbitrator {
+      * @param Millisecons
+      * @return received power (dBm)
+      */
+-    public double computeReceivedPower(Medium.Transmission t, Medium.Receiver receiver, int Milliseconds) {
++    public double computeReceivedPower(Transmitter tOrigin, double tPt, Medium.Receiver receiver, int Milliseconds) {
+         //Indoor channel model with consideration of movement of people/obstacles
+         //people density -number of people or obstacles over an occupied area- (m-2)
+-        double p = densityObstacles(t.origin, receiver);
++        double p = densityObstacles(tOrigin, receiver);
+         //length of ray over area with moving people(m)
+-        double d = distance(t.origin, receiver);
++        double d = distance(tOrigin, receiver);
+         //Time sharing between bad and good state
+         double A = Math.pow((1-p),0.2*d);
+         //Log-distance Pathloss model (d0,n)
+@@ -177,6 +181,6 @@ public class LossyModel implements Medium.Arbitrator {
+         double Lsf = Math.pow(10,s/20);
+         //Fading computation following Lutz's model
+         double Fading = 10*Math.log10(A * L_Rician + (1-A) * (Lsf*L_Rayleigh));
+-        return (t.Pt - Fading - PathLoss);
++        return (tPt - Fading - PathLoss);
+     }
+ }
+diff --git a/src/avrora/sim/radio/Medium.java b/src/avrora/sim/radio/Medium.java
+index 83225c0..4c0cf9e 100644
+--- a/src/avrora/sim/radio/Medium.java
++++ b/src/avrora/sim/radio/Medium.java
+@@ -38,8 +38,6 @@ import avrora.sim.clock.Synchronizer;
+ import avrora.sim.Simulator;
+ import avrora.sim.util.TransactionalList;
+ 
+-import java.util.*;
+-
+ import cck.util.Arithmetic;
+ 
+ /**
+@@ -57,9 +55,9 @@ public class Medium {
+     private static double Pr = (double) Pn;//Received Power in dBm
+ 
+     public interface Arbitrator {
+-        public boolean lockTransmission(Receiver receiver, Transmission tran, int Milliseconds);
+-        public char mergeTransmissions(Receiver receiver, List<Medium.Transmission> trans, long bit, int Milliseconds);
+-        public double computeReceivedPower(Medium.Transmission t, Medium.Receiver receiver, int Milliseconds);
++        public boolean lockTransmission(Receiver receiver, Transmitter tran, double tPt, double tF, int Milliseconds);
++        public char mergeTransmissions(Receiver receiver, CustomTransmissionList trans, long bit, int Milliseconds);
++        public double computeReceivedPower(Transmitter tObject, double tPt, Medium.Receiver receiver, int Milliseconds);
+         public int getNoise(int index);
+     }
+ 
+@@ -262,6 +260,7 @@ public class Medium {
+         protected boolean locked;
+         protected double frequency;
+         public Receiver.Ticker ticker;
++        private final CustomTransmissionList scratchIntersection = new CustomTransmissionList(4);
+ 
+         //Receiver class constructor
+         protected Receiver(Medium m, Clock c) {
+@@ -371,21 +370,21 @@ public class Medium {
+              * @param oneBitBeforeNow
+              */
+             private void deliverByte(long oneBitBeforeNow) {
+-                List<Transmission> it = getIntersection(oneBitBeforeNow - BYTE_SIZE);
++                CustomTransmissionList it = getIntersection(oneBitBeforeNow - BYTE_SIZE);
+                 if (it != null) {//there is a transmission
+                     boolean one = false;
+                     double rssi = 0.0;
+                     double SNR = 0;
+-                    assert it.size() > 0;
+-                    for (Transmission t : it) {
++                    assert it.length > 0;
++                    for (int idx = 0; idx < it.length; idx++) {
+                         if (one) {//more than one transmission
+-                            double I = medium.arbitrator.computeReceivedPower(t, Receiver.this, (int) clock.cyclesToMillis(clock.getCount()));
++                            double I = medium.arbitrator.computeReceivedPower(it.getTransmitter(idx), it.getPt(idx), Receiver.this, (int) clock.cyclesToMillis(clock.getCount()));
+                             //add interference to received power in linear scale
+                             rssi = 10 * Math.log10(Math.pow(10, rssi / 10) + Math.pow(10, I / 10));
+                             SNR = SNR - I;
+                         } else {//only one transmission - no interference -
+                             one = true;
+-                            Pr = medium.arbitrator.computeReceivedPower(t, Receiver.this, (int) clock.cyclesToMillis(clock.getCount()));
++                            Pr = medium.arbitrator.computeReceivedPower(it.getTransmitter(idx), it.getPt(idx), Receiver.this, (int) clock.cyclesToMillis(clock.getCount()));
+                             Pn = medium.arbitrator.getNoise((int) clock.cyclesToMillis(clock.getCount()));
+                             rssi = Pr;
+                             SNR = Pr - Pn;
+@@ -438,7 +437,7 @@ public class Medium {
+                 long time = clock.getCount();
+                 long bit = getBitNum(time) - BIT_DELAY; // there is a one bit delay
+                 waitForNeighbors(time - cyclesPerByte);
+-                List<Transmission> it = getIntersection(bit - BYTE_SIZE);
++                CustomTransmissionList it = getIntersection(bit - BYTE_SIZE);
+                 if (it != null) { //if there is a transmission
+                     //There are 3 modes (ED, 802.15.4 compliant detection, both)
+                     int cca_mode = (MDMCTRL0_reg & 0x00c0) >>> 6;
+@@ -446,15 +445,15 @@ public class Medium {
+                     if (cca_mode == 1 || cca_mode == 3) {
+                         boolean one = false;
+                         double rssi = 0.0;
+-                        assert it.size() > 0;
+-                        for (Transmission t : it) {
++                        assert it.length > 0;
++                        for (int idx = 0; idx < it.length; idx++) {
+                             if (one) {//more than one transmission
+-                                double I = medium.arbitrator.computeReceivedPower(t, Receiver.this, (int) clock.cyclesToMillis(clock.getCount()));
++                                double I = medium.arbitrator.computeReceivedPower(it.getTransmitter(idx), it.getPt(idx), Receiver.this, (int) clock.cyclesToMillis(clock.getCount()));
+                                 //add interference to received power in linear scale
+                                 rssi = 10 * Math.log10(Math.pow(10, rssi / 10) + Math.pow(10, I / 10));
+                             } else {//only one transmission - no interference -
+                                 one = true;
+-                                Pr = medium.arbitrator.computeReceivedPower(t, Receiver.this, (int) clock.cyclesToMillis(clock.getCount()));
++                                Pr = medium.arbitrator.computeReceivedPower(it.getTransmitter(idx), it.getPt(idx), Receiver.this, (int) clock.cyclesToMillis(clock.getCount()));
+                                 Pn = medium.arbitrator.getNoise((int) clock.cyclesToMillis(clock.getCount()));
+                                 rssi = Pr;
+                             }
+@@ -482,15 +481,19 @@ public class Medium {
+         private Transmission earliestNewTransmission(long bit) {
+             Transmission tx = null;
+             synchronized (medium) {
+-                Iterator<Transmission> i = medium.transmissions.iterator();
+-                while (i.hasNext()) {
+-                    Transmission t = i.next();
+-                    if (bit <= t.firstBit && medium.arbitrator.lockTransmission(Receiver.this, t, (int) clock.cyclesToMillis(clock.getCount()))) {
+-                        if (tx == null) tx = t;
+-                        else if (t.firstBit < tx.firstBit) tx = t;
+-                    } else if (bit - 8 - 2 * medium.leadBits > t.lastBit) {
++                int idx = 0;
++                while (idx < medium.transmissions.length) {
++                    long fb = medium.transmissions.firstBit[idx];
++                    if (bit <= fb && medium.arbitrator.lockTransmission(Receiver.this, medium.transmissions.getTransmitter(idx), medium.transmissions.getPt(idx), medium.transmissions.getFrequency(idx), (int) clock.cyclesToMillis(clock.getCount()))) {
++                        Transmission candidate = medium.transmissions.getTransmissionRef(idx);
++                        if (tx == null) tx = candidate;
++                        else if (fb < tx.firstBit) tx = candidate;
++                        idx++;
++                    } else if (bit - 8 - 2 * medium.leadBits > medium.transmissions.getLastBit(idx)) {
+                         // remove older transmissions
+-                        i.remove();
++                        medium.transmissions.remove(idx);
++                    } else {
++                        idx++;
+                     }
+                 }
+             }
+@@ -503,29 +506,18 @@ public class Medium {
+          * @param bit time in which calculate if tx intersect (oneBitBeforeNow - BYTE_SIZE)
+          * @return it representing the list of transmissions that intersect
+          */
+-        private List<Transmission> getIntersection(long bit) {
+-            List<Transmission> it = null;
++        private CustomTransmissionList getIntersection(long bit) {
++            scratchIntersection.clear();
+             synchronized (medium) {
+-                for (Transmission t : medium.transmissions) {
+-                    if (intersect(bit, t)) {
+-                        if (it == null) it = new LinkedList<Transmission>();
+-                        it.add(t);
++                for (int idx = 0; idx < medium.transmissions.length; idx++) {
++                    long fb = medium.transmissions.firstBit[idx];
++                    long lb = medium.transmissions.getLastBit(idx);
++                    if (bit >= fb && bit < lb) {
++                        scratchIntersection.addFrom(medium.transmissions, idx);
+                     }
+                 }
+             }
+-            return it;
+-        }
+-
+-        /**
+-         * The method <code>intersect</code> calculates if byte to transmit intersect
+-         * with another transmission
+-         *
+-         * @param bit time in which calculate if tx intersect (oneBitBeforeNow - BYTE_SIZE)
+-         * @param t   Transmission to find out if intersects
+-         * @return true if they intersect, false otherwise
+-         */
+-        private boolean intersect(long bit, Transmission t) {
+-            return bit >= t.firstBit && bit < t.lastBit;
++            return scratchIntersection.length > 0 ? scratchIntersection : null;
+         }
+ 
+         private void waitForNeighbors(long gtime) {
+@@ -534,25 +526,22 @@ public class Medium {
+     }
+ 
+     public static class BasicArbitrator implements Arbitrator {
+-        public boolean lockTransmission(Receiver receiver, Transmission trans, int Milliseconds) {
++        public boolean lockTransmission(Receiver receiver, Transmitter tran, double tPt, double tF, int Milliseconds) {
+             return true;
+         }
+ 
+-        public char mergeTransmissions(Receiver receiver, List<Transmission> it, long bit, int Milliseconds) {
+-            assert it.size() > 0;
+-            Iterator<Transmission> i = it.iterator();
+-            Transmission first = i.next();
+-            int value = 0xff & first.getByteAtTime(bit);
+-            while (i.hasNext()) {
+-                Transmission next = i.next();
+-                int nval = 0xff & next.getByteAtTime(bit);
++        public char mergeTransmissions(Receiver receiver, CustomTransmissionList it, long bit, int Milliseconds) {
++            assert it.length > 0;
++            int value = 0xff & it.getByteAtTime(0, bit);
++            for (int i = 1; i < it.length; i++) {
++                int nval = 0xff & it.getByteAtTime(i, bit);
+                 value |= (nval << 8) ^ (value << 8); // compute corrupted bits
+                 value |= nval;
+             }
+             return (char) value;
+         }
+ 
+-        public double computeReceivedPower(Medium.Transmission t, Medium.Receiver receiver, int Milliseconds) {
++        public double computeReceivedPower(Transmitter tObject, double tPt, Medium.Receiver receiver, int Milliseconds) {
+             return Pr;
+         }
+ 
+@@ -640,7 +629,7 @@ public class Medium {
+     public final int minLength;
+     public final int maxLength;
+ 
+-    protected List<Transmission> transmissions = new LinkedList<Transmission>();
++    protected CustomTransmissionList transmissions = new CustomTransmissionList();
+ 
+     /**
+      * The constructor for the <code>Medium</code> class creates a new shared transmission
+diff --git a/src/avrora/sim/radio/RadiusModel.java b/src/avrora/sim/radio/RadiusModel.java
+index 508241c..b64cadb 100644
+--- a/src/avrora/sim/radio/RadiusModel.java
++++ b/src/avrora/sim/radio/RadiusModel.java
+@@ -10,7 +10,8 @@ import avrora.sim.radio.Medium.TXRX;
+ import avrora.sim.radio.Topology;
+ import avrora.sim.radio.Topology.Position;
+ 
+-import java.util.*;
++import java.util.HashMap;
++import java.util.Map;
+ 
+ /**
+  * The <code>RadiusModel</code> definition.
+@@ -37,30 +38,28 @@ public class RadiusModel implements Medium.Arbitrator {
+         return (-90);   
+         
+     }
+-        public double computeReceivedPower(Medium.Transmission t, Medium.Receiver receiver, int Milliseconds) {
+-        
++        public double computeReceivedPower(Medium.Transmitter tObject, double tPt, Medium.Receiver receiver, int Milliseconds) {
+         return (0);
+     }
+ 
+-    public boolean lockTransmission(Medium.Receiver receiver, Medium.Transmission trans,int Milliseconds) {
+-        return distanceSq(trans.origin, receiver) <= maximumDistanceSq;
++    public boolean lockTransmission(Medium.Receiver receiver, Medium.Transmitter tran, double tPt, double tF, int Milliseconds) {
++        return distanceSq(tran, receiver) <= maximumDistanceSq;
+     }
+ 
+-    public char mergeTransmissions(Medium.Receiver receiver, List<Medium.Transmission> it, long bit,int Milliseconds) {
+-        assert it.size() > 0;
++    public char mergeTransmissions(Medium.Receiver receiver, CustomTransmissionList it, long bit, int Milliseconds) {
++        assert it.length > 0;
+         boolean one = false;
+         int value = 0;
+-        for (Medium.Transmission next : it) {
+-            if (lockTransmission(receiver, next, Milliseconds)) {
++        for (int i = 0; i < it.length; i++) {
++            if (lockTransmission(receiver, it.getTransmitter(i), it.getPt(i), it.getFrequency(i), Milliseconds)) {
+                 if (one) {
+-                    int nval = 0xff & next.getByteAtTime(bit);
++                    int nval = 0xff & it.getByteAtTime(i, bit);
+                     value |= (nval << 8) ^ (value << 8); // compute corrupted bits
+                     value |= nval;
+                 } else {
+                     one = true;
+-                    value = 0xff & next.getByteAtTime(bit);
++                    value = 0xff & it.getByteAtTime(i, bit);
+                 }
+-
+             }
+         }
+         assert one;
